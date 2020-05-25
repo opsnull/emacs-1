@@ -338,43 +338,70 @@ Also store it in `eldoc-last-message' and return that value."
 
 
 (defvar eldoc-documentation-functions nil
-  "Hook for functions to call to return doc string.
-Each function should accept no arguments and return a one-line
-string for displaying doc about a function etc. appropriate to
-the context around point.  It should return nil if there's no doc
-appropriate for the context.  Typically doc is returned if point
-is on a function-like name or in its arg list.
+  "Hook of functions that produce doc strings.
 
-Major modes should modify this hook locally, for example:
+A doc string is typically relevant if point is on a function-like
+name, inside its arg list, or on any object with some associated
+information.
+
+Each hook function should accept at least one argument CALLBACK
+and decide whether to display a doc short string about the
+context around point.  If the decision and the doc string can be
+produced quickly, the hook function can ignore CALLBACK and
+immediately return the doc string, or nil if there's no doc
+appropriate for the context.  Otherwise, if the computation of
+said docstring is expensive or can't be performed directly, the
+hook function should return a non-nil, non-string value and then
+arrange for CALLBACK to be called at a later time.
+
+That call is expected to pass CALLBACK a single argument
+DOCSTRING followed by an optional list of keyword-value pairs of
+the form (:KEY VALUE :KEY2 VALUE2...).  KEY can be:
+
+* `:hint', whereby the corresponding VALUE should be a short
+  string designating the thing being reported on by the hook
+  function.
+
+Note that this hook is only in effect if the value of
+`eldoc-documentation-function' (notice the singular) is bound to
+one of its pre-set values.  Major modes should modify this hook
+locally, for example:
   (add-hook \\='eldoc-documentation-functions #\\='foo-mode-eldoc nil t)
 so that the global value (i.e. the default value of the hook) is
 taken into account if the major mode specific function does not
 return any documentation.")
 
+(defun eldoc--handle-multiline (res)
+  "Helper for handling a bit of `eldoc-echo-area-use-multiline-p'."
+  (if eldoc-echo-area-use-multiline-p res
+    (truncate-string-to-width
+     res (1- (window-width (minibuffer-window))))))
+
+;; this variable should be unbound, but that confuses
+;; `describe-symbol' for some reason.
+(defvar eldoc--make-callback nil
+  "Dynamically bound to a nullary function that returns a callback.
+Besides producing the callback that is passed to
+`eldoc-documentation-functions', this also remembers the
+callbacks relative order in the queue of callbacks waiting to be
+called. ")
+
 (defun eldoc-documentation-default ()
   "Show first doc string for item at point.
 Default value for `eldoc-documentation-function'."
-  (let ((res (run-hook-with-args-until-success 'eldoc-documentation-functions)))
-    (when res
-      (if eldoc-echo-area-use-multiline-p res
-        (truncate-string-to-width
-         res (1- (window-width (minibuffer-window))))))))
+  (run-hook-with-args-until-success 'eldoc-documentation-functions
+   (funcall eldoc--make-callback)))
 
 (defun eldoc-documentation-compose ()
   "Show multiple doc string results at once.
 Meant as a value for `eldoc-documentation-function'."
-  (let (res)
-    (run-hook-wrapped
-     'eldoc-documentation-functions
-     (lambda (f)
-       (let ((str (funcall f)))
-         (when str (push str res))
-         nil)))
-    (when res
-      (setq res (mapconcat #'identity (nreverse res) ", "))
-      (if eldoc-echo-area-use-multiline-p res
-        (truncate-string-to-width
-         res (1- (window-width (minibuffer-window))))))))
+  (run-hook-wrapped 'eldoc-documentation-functions
+                    (lambda (f)
+                      (let* ((callback (funcall eldoc--make-callback))
+                             (str (funcall f callback)))
+                        (if (stringp str) (funcall callback str))
+                        nil)))
+  t)
 
 (defcustom eldoc-documentation-function #'eldoc-documentation-default
   "Function to call to return doc string.
@@ -417,11 +444,39 @@ effect."
         ;; Erase the last message if we won't display a new one.
         (when eldoc-last-message
           (eldoc-message nil))
-      (let ((non-essential t))
+      (let ((non-essential t)
+            (buffer (current-buffer)))
         ;; Only keep looking for the info as long as the user hasn't
         ;; requested our attention.  This also locally disables inhibit-quit.
         (while-no-input
-          (eldoc-message (funcall eldoc-documentation-function)))))))
+          (let* (;; `want' and `received' keep track of how many
+                 ;; docstrings we expect from the clients.
+                 (pos 0) (want 0) (received '())
+                 (receive-doc
+                  (lambda (_pos string _plist)
+                    (with-current-buffer buffer
+                      (when (and string (> (length string) 0))
+                        (push string received))
+                      (setq want (1- want))
+                      (when (zerop want)
+                        (eldoc-message
+                         (eldoc--handle-multiline
+                          (mapconcat #'identity
+                                     (nreverse received)
+                                     ",")))))))
+                 (eldoc--make-callback
+                  (lambda ()
+                    (setq want (1+ want))
+                    (let ((pos (setq pos (1+ pos))))
+                      (lambda (string &rest plist)
+                        (funcall receive-doc pos string plist)))))
+                 (res (funcall eldoc-documentation-function)))
+            (cond (;; old protocol: got string, output immediately
+                   (stringp res) (setq want 1) (funcall receive-doc 0 res nil))
+                  (;; old protocol: got nil, clear the echo area
+                   (null res) (eldoc-message nil))
+                  (;; got something else, trust callback will be called
+                   t) )))))))
 
 ;; If the entire line cannot fit in the echo area, the symbol name may be
 ;; truncated or eliminated entirely from the output to make room for the
