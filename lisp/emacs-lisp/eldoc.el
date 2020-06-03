@@ -379,29 +379,38 @@ return any documentation.")
 
 ;; this variable should be unbound, but that confuses
 ;; `describe-symbol' for some reason.
-(defvar eldoc--make-callback nil
-  "Dynamically bound to a nullary function that returns a callback.
-Besides producing the callback that is passed to
-`eldoc-documentation-functions', this also remembers the
-callbacks relative order in the queue of callbacks waiting to be
-called. ")
+(defvar eldoc--make-callback nil "Helper for function `eldoc--make-callback'.")
+
+(defun eldoc--make-callback (&optional eagerp)
+  "Make callback suitable for `eldoc-documentation-functions'."
+  (funcall eldoc--make-callback eagerp))
 
 (defun eldoc-documentation-default ()
   "Show first doc string for item at point.
 Default value for `eldoc-documentation-function'."
   (run-hook-with-args-until-success 'eldoc-documentation-functions
-   (funcall eldoc--make-callback)))
+   (eldoc--make-callback)))
 
 (defun eldoc-documentation-compose ()
-  "Show multiple doc string results at once.
+  "Show multiple doc strings at once after waiting for all.
 Meant as a value for `eldoc-documentation-function'."
   (run-hook-wrapped 'eldoc-documentation-functions
                     (lambda (f)
-                      (let* ((callback (funcall eldoc--make-callback))
+                      (let* ((callback (eldoc--make-callback))
                              (str (funcall f callback)))
                         (if (stringp str) (funcall callback str))
                         nil)))
   t)
+
+(defun eldoc-documentation-eager ()
+  "Show most important doc string produced so far.
+Meant as a value for `eldoc-documentation-function'."
+  (run-hook-wrapped 'eldoc-documentation-functions
+                    (lambda (f)
+                      (let* ((callback (eldoc--make-callback 'eager))
+                             (str (funcall f callback)))
+                        (if (stringp str) (funcall callback str))
+                        nil))))
 
 (defcustom eldoc-documentation-function #'eldoc-documentation-default
   "Function to call to return doc string.
@@ -418,6 +427,7 @@ effect."
   :link '(info-link "(emacs) Lisp Doc")
   :type '(radio (function-item eldoc-documentation-default)
                 (function-item eldoc-documentation-compose)
+                (function-item eldoc-documentation-eager)
                 (function :tag "Other function"))
   :version "28.1")
 
@@ -449,9 +459,9 @@ effect."
         ;; Only keep looking for the info as long as the user hasn't
         ;; requested our attention.  This also locally disables inhibit-quit.
         (while-no-input
-          (let* (;; `want' and `received' keep track of how many
-                 ;; docstrings we expect from the clients.
-                 (pos 0) (want 0) (received '())
+          (let* ((pos 0)        ; how many hook functions have registered
+                 (want 0)       ; how many calls to `receive-doc' until we print
+                 (received '()) ; what we will print
                  (receive-doc
                   (lambda (_pos string _plist)
                     (with-current-buffer buffer
@@ -465,18 +475,25 @@ effect."
                                      (nreverse received)
                                      ",")))))))
                  (eldoc--make-callback
-                  (lambda ()
-                    (setq want (1+ want))
+                  (lambda (eagerp)
                     (let ((pos (setq pos (1+ pos))))
-                      (lambda (string &rest plist)
-                        (funcall receive-doc pos string plist)))))
+                      (cond (eagerp
+                             (lambda (string &rest plist)
+                               (when (cl-loop for (p) in received
+                                              never (< p pos))
+                                 (setq want 1 received '())
+                                 (funcall receive-doc pos string plist))))
+                            (t
+                             (setq want (1+ want))
+                             (lambda (string &rest plist)
+                               (funcall receive-doc pos string plist)))))))
                  (res (funcall eldoc-documentation-function)))
             (cond (;; old protocol: got string, output immediately
                    (stringp res) (setq want 1) (funcall receive-doc 0 res nil))
                   (;; old protocol: got nil, clear the echo area
                    (null res) (eldoc-message nil))
                   (;; got something else, trust callback will be called
-                   t) )))))))
+                   t))))))))
 
 ;; If the entire line cannot fit in the echo area, the symbol name may be
 ;; truncated or eliminated entirely from the output to make room for the
