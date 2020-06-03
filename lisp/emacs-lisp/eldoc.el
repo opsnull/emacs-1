@@ -113,6 +113,13 @@ documentation string visible."
  symbol names if it will\ enable argument list to fit on one
  line" truncate-sym-name-if-fit)))
 
+(defcustom eldoc-prefer-doc-buffer nil
+  "Prefer Eldoc's documentation buffer if it is showing in some frame.
+If this variable's value is t and a piece of documentation needs
+to be truncated to fit in the echo area, do so only if Eldoc's
+documentation buffer is not already showing."
+  :type 'boolean)
+
 (defface eldoc-highlight-function-argument
   '((t (:inherit bold)))
   "Face used for the argument at point in a function's argument list.
@@ -420,14 +427,17 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
            do (goto-char (line-end-position (if truncated 0 -1)))
            (while (bolp) (goto-char (line-end-position 0)))
            finally
-           (eldoc-message
-            (concat (buffer-substring (point-min) (point))
-                    (and truncated
-                         (format
-                          "\n(Documentation truncated. Use `%s' to see rest)"
-                          (substitute-command-keys "\\[eldoc-doc-buffer]")))))))
+           (unless (and truncated
+                        eldoc-prefer-doc-buffer
+                        (get-buffer-window eldoc--doc-buffer))
+             (eldoc-message
+              (concat (buffer-substring (point-min) (point))
+                      (and truncated
+                           (format
+                            "\n(Documentation truncated. Use `%s' to see rest)"
+                            (substitute-command-keys "\\[eldoc-doc-buffer]"))))))))
          ((= available 1)
-          ;; truncate brutally
+          ;; truncate brutally ; FIXME: use `eldoc-prefer-doc-buffer' here, too?
           (eldoc-message
            (truncate-string-to-width
             (replace-regexp-in-string "\n" " " (car (car docs))) width))))))))
