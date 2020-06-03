@@ -256,7 +256,9 @@ reflect the change."
                (when (or eldoc-mode
                          (and global-eldoc-mode
                               (eldoc--supported-p)))
-                 (eldoc-print-current-symbol-info))))))
+                 ;; Don't ignore, but also don't full-on signal errors
+                 (with-demoted-errors "eldoc error: %s"
+                   (eldoc-print-current-symbol-info)) )))))
 
   ;; If user has changed the idle delay, update the timer.
   (cond ((not (= eldoc-idle-delay eldoc-current-idle-delay))
@@ -513,54 +515,54 @@ The built-in values for this function already handle
            ;; there's some eldoc support in the current buffer.
            (local-variable-p 'eldoc-documentation-function))))
 
+(defalias 'eldoc #'eldoc-print-current-symbol-info)
+
 (defun eldoc-print-current-symbol-info ()
-  "Print the text produced by `eldoc-documentation-function'."
-  ;; This is run from post-command-hook or some idle timer thing,
-  ;; so we need to be careful that errors aren't ignored.
-  (with-demoted-errors "eldoc error: %s"
-    (if (not (eldoc-display-message-p))
-        ;; Erase the last message if we won't display a new one.
-        (when eldoc-last-message
-          (eldoc-message nil))
-      (let ((non-essential t)
-            (buffer (current-buffer)))
-        ;; Only keep looking for the info as long as the user hasn't
-        ;; requested our attention.  This also locally disables inhibit-quit.
-        (while-no-input
-          (let* ((pos 0)        ; how many hook functions have registered
-                 (want 0)       ; how many calls to `receive-doc' until we print
-                 (received '()) ; what we will print
-                 (receive-doc
-                  (lambda (pos string plist)
-                    (with-current-buffer buffer
-                      (when (and string (> (length string) 0))
-                        (push (cons pos (cons string plist)) received))
-                      (setq want (1- want))
-                      (when (zerop want)
-                        (eldoc--handle-docs
-                         (mapcar #'cdr
-                                 (sort received (lambda (d1 d2)
-                                                  (< (car d1) (car d2))))))))))
-                 (eldoc--make-callback
-                  (lambda (eagerp)
-                    (let ((pos (setq pos (1+ pos))))
-                      (cond (eagerp
-                             (lambda (string &rest plist)
-                               (when (cl-loop for (p) in received
-                                              never (< p pos))
-                                 (setq want 1 received '())
-                                 (funcall receive-doc pos string plist))))
-                            (t
-                             (setq want (1+ want))
-                             (lambda (string &rest plist)
-                               (funcall receive-doc pos string plist)))))))
-                 (res (funcall eldoc-documentation-function)))
-            (cond (;; old protocol: got string, output immediately
-                   (stringp res) (setq want 1) (funcall receive-doc 0 res nil))
-                  (;; old protocol: got nil, clear the echo area
-                   (null res) (eldoc-message nil))
-                  (;; got something else, trust callback will be called
-                   t))))))))
+  "Document thing at point."
+  (interactive)
+  (if (not (eldoc-display-message-p))
+      ;; Erase the last message if we won't display a new one.
+      (when eldoc-last-message
+        (eldoc-message nil))
+    (let ((non-essential t)
+          (buffer (current-buffer)))
+      ;; Only keep looking for the info as long as the user hasn't
+      ;; requested our attention.  This also locally disables inhibit-quit.
+      (while-no-input
+        (let* ((pos 0)        ; how many hook functions have registered
+               (want 0)       ; how many calls to `receive-doc' until we print
+               (received '()) ; what we will print
+               (receive-doc
+                (lambda (pos string plist)
+                  (with-current-buffer buffer
+                    (when (and string (> (length string) 0))
+                      (push (cons pos (cons string plist)) received))
+                    (setq want (1- want))
+                    (when (zerop want)
+                      (eldoc--handle-docs
+                       (mapcar #'cdr
+                               (sort received (lambda (d1 d2)
+                                                (< (car d1) (car d2))))))))))
+               (eldoc--make-callback
+                (lambda (eagerp)
+                  (let ((pos (setq pos (1+ pos))))
+                    (cond (eagerp
+                           (lambda (string &rest plist)
+                             (when (cl-loop for (p) in received
+                                            never (< p pos))
+                               (setq want 1 received '())
+                               (funcall receive-doc pos string plist))))
+                          (t
+                           (setq want (1+ want))
+                           (lambda (string &rest plist)
+                             (funcall receive-doc pos string plist)))))))
+               (res (funcall eldoc-documentation-function)))
+          (cond (;; old protocol: got string, output immediately
+                 (stringp res) (setq want 1) (funcall receive-doc 0 res nil))
+                (;; old protocol: got nil, clear the echo area
+                 (null res) (eldoc-message nil))
+                (;; got something else, trust callback will be called
+                 t)))))))
 
 ;; If the entire line cannot fit in the echo area, the symbol name may be
 ;; truncated or eliminated entirely from the output to make room for the
