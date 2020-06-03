@@ -47,6 +47,8 @@
 
 ;;; Code:
 
+(eval-when-compile (require 'cl-lib))
+
 (defgroup eldoc nil
   "Show function arglist or variable docstring in echo area."
   :group 'lisp
@@ -84,26 +86,32 @@ Note that this variable has no effect, unless
 (make-obsolete-variable 'eldoc-argument-case nil "25.1")
 
 (defcustom eldoc-echo-area-use-multiline-p 'truncate-sym-name-if-fit
-  "Allow long ElDoc messages to resize echo area display.
-If value is t, never attempt to truncate messages; complete symbol name
-and function arglist or 1-line variable documentation will be displayed
-even if echo area must be resized to fit.
+  "Allow long ElDoc documentation to resize echo area display.
+If value is t, never attempt to truncate messages; complete
+symbol name and function arglist or 1-line variable documentation
+will be displayed even if echo area must be resized to fit.  This
+resizing will, however, respect `max-mini-window-height'
 
-If value is any non-nil value other than t, symbol name may be truncated
-if it will enable the function arglist or documentation string to fit on a
-single line without resizing window.  Otherwise, behavior is just like
-former case.
+If value is a number (integer or floating point), it is used
+instead of `max-mini-window-height', with the same heigh-limited
+semantics, but for Eldoc purposes only.
 
-If value is nil, messages are always truncated to fit in a single line of
-display in the echo area.  Function or variable symbol name may be
-truncated to make more of the arglist or documentation string visible.
+If value is any non-nil symbol other than t, symbol name may be
+truncated if it will enable the function arglist or documentation
+string to fit on a single line without resizing window.
+Otherwise, behavior is just like the t case.
 
-Note that this variable has no effect, unless
-`eldoc-documentation-function' handles it explicitly."
-  :type '(radio (const :tag "Always" t)
-                (const :tag "Never" nil)
-                (const :tag "Yes, but truncate symbol names if it will\
- enable argument list to fit on one line" truncate-sym-name-if-fit)))
+If value is nil, documentation is always truncated to fit in a
+single line of display in the echo area.  Function or variable
+symbol name may be truncated to make more of the arglist or
+documentation string visible."
+  :type '(radio (const   :tag "Always" t)
+                (float   :tag "Fraction of frame height" 0.25)
+                (integer :tag "Number of lines" 5)
+                (const   :tag "Never" nil)
+                (const   :tag "Yes, but ask major-mode to truncate
+ symbol names if it will\ enable argument list to fit on one
+ line" truncate-sym-name-if-fit)))
 
 (defface eldoc-highlight-function-argument
   '((t (:inherit bold)))
@@ -359,8 +367,8 @@ DOCSTRING followed by an optional list of keyword-value pairs of
 the form (:KEY VALUE :KEY2 VALUE2...).  KEY can be:
 
 * `:hint', whereby the corresponding VALUE should be a short
-  string designating the thing being reported on by the hook
-  function.
+  string designating the type of documentation reported on by the
+  hook function.
 
 Note that this hook is only in effect if the value of
 `eldoc-documentation-function' (notice the singular) is bound to
@@ -371,11 +379,58 @@ so that the global value (i.e. the default value of the hook) is
 taken into account if the major mode specific function does not
 return any documentation.")
 
-(defun eldoc--handle-multiline (res)
-  "Helper for handling a bit of `eldoc-echo-area-use-multiline-p'."
-  (if eldoc-echo-area-use-multiline-p res
-    (truncate-string-to-width
-     res (1- (window-width (minibuffer-window))))))
+(defvar eldoc--doc-buffer nil "Buffer holding latest eldoc-produced docs.")
+(defun eldoc-doc-buffer (&optional interactive)
+  "Get latest *eldoc* help buffer.  Interactively, display it."
+  (interactive (list t))
+  (prog1
+      (or eldoc--doc-buffer (setq eldoc--doc-buffer
+                                  (get-buffer-create "*eldoc*")))
+    (when interactive (display-buffer eldoc--doc-buffer))))
+
+(defun eldoc--handle-docs (docs)
+  "Display multiple DOCS in echo area.
+DOCS is a list of (STRING PLIST...).  It is already sorted.
+Honour most of `eldoc-echo-area-use-multiline-p'."
+  (with-current-buffer (eldoc-doc-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer) (setq buffer-read-only t)
+      (insert (mapconcat #'identity (mapcar #'car docs) "\n")))
+    (let* ((width (1- (window-width (minibuffer-window))))
+           (val (if (and (symbolp eldoc-echo-area-use-multiline-p)
+                         eldoc-echo-area-use-multiline-p)
+                    max-mini-window-height
+                  eldoc-echo-area-use-multiline-p))
+           (available (cl-typecase val
+                        (float (truncate (* (frame-height) val)))
+                        (integer val)
+                        (t 1))))
+      (eldoc-message nil) ; clear the echo area
+      (when docs
+        (cond
+         ((> available 1)
+          (cl-loop
+           initially (goto-char (point-min))
+           (goto-char (line-end-position (1+ available)))
+           for truncated = nil then t
+           for needed
+           = (let ((truncate-lines message-truncate-lines))
+               (count-screen-lines (point-min) (point) t (minibuffer-window)))
+           while (> needed (if truncated (1- available) available))
+           do (goto-char (line-end-position (if truncated 0 -1)))
+           (while (bolp) (goto-char (line-end-position 0)))
+           finally
+           (eldoc-message
+            (concat (buffer-substring (point-min) (point))
+                    (and truncated
+                         (format
+                          "\n(Documentation truncated. Use `%s' to see rest)"
+                          (substitute-command-keys "\\[eldoc-doc-buffer]")))))))
+         ((= available 1)
+          ;; truncate brutally
+          (eldoc-message
+           (truncate-string-to-width
+            (replace-regexp-in-string "\n" " " (car (car docs))) width))))))))
 
 ;; this variable should be unbound, but that confuses
 ;; `describe-symbol' for some reason.
@@ -421,9 +476,12 @@ Typically doc is returned if point is on a function-like name or in its
 arg list.
 
 The result is used as is, so the function must explicitly handle
-the variables `eldoc-argument-case' and `eldoc-echo-area-use-multiline-p',
-and the face `eldoc-highlight-function-argument', if they are to have any
-effect."
+the variable `eldoc-argument-case' and the face
+`eldoc-highlight-function-argument', if they are to have any
+effect.
+
+The built-in values for this function already handle
+`eldoc-echo-area-use-multiline-p'." ; FIXME: a lie, only some of it
   :link '(info-link "(emacs) Lisp Doc")
   :type '(radio (function-item eldoc-documentation-default)
                 (function-item eldoc-documentation-compose)
@@ -463,17 +521,16 @@ effect."
                  (want 0)       ; how many calls to `receive-doc' until we print
                  (received '()) ; what we will print
                  (receive-doc
-                  (lambda (_pos string _plist)
+                  (lambda (pos string plist)
                     (with-current-buffer buffer
                       (when (and string (> (length string) 0))
-                        (push string received))
+                        (push (cons pos (cons string plist)) received))
                       (setq want (1- want))
                       (when (zerop want)
-                        (eldoc-message
-                         (eldoc--handle-multiline
-                          (mapconcat #'identity
-                                     (nreverse received)
-                                     ",")))))))
+                        (eldoc--handle-docs
+                         (mapcar #'cdr
+                                 (sort received (lambda (d1 d2)
+                                                  (< (car d1) (car d2))))))))))
                  (eldoc--make-callback
                   (lambda (eagerp)
                     (let ((pos (setq pos (1+ pos))))
