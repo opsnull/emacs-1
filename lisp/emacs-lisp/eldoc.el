@@ -517,6 +517,9 @@ The built-in values for this function already handle
 
 (defalias 'eldoc #'eldoc-print-current-symbol-info)
 
+(defvar eldoc--enthusiasm-curbing-timer nil
+  "Timer used by `eldoc-documentation-eager' to avoid blinking.")
+
 (defun eldoc-print-current-symbol-info ()
   "Document thing at point."
   (interactive)
@@ -529,7 +532,7 @@ The built-in values for this function already handle
       ;; Only keep looking for the info as long as the user hasn't
       ;; requested our attention.  This also locally disables inhibit-quit.
       (while-no-input
-        (let* ((pos 0)        ; how many hook functions have registered
+        (let* ((howmany 0)    ; how many hook functions have registered
                (want 0)       ; how many calls to `receive-doc' until we print
                (received '()) ; what we will print
                (receive-doc
@@ -537,23 +540,30 @@ The built-in values for this function already handle
                   (with-current-buffer buffer
                     (when (and string (> (length string) 0))
                       (push (cons pos (cons string plist)) received))
-                    (setq want (1- want))
+                    (cl-decf want)
                     (when (zerop want)
                       (eldoc--handle-docs
                        (mapcar #'cdr
-                               (sort received (lambda (d1 d2)
-                                                (< (car d1) (car d2))))))))))
+                               (cl-sort received #'< :key #'car)))))))
                (eldoc--make-callback
                 (lambda (eagerp)
-                  (let ((pos (setq pos (1+ pos))))
+                  (let ((pos (prog1 howmany (cl-incf howmany))))
                     (cond (eagerp
                            (lambda (string &rest plist)
                              (when (cl-loop for (p) in received
                                             never (< p pos))
                                (setq want 1 received '())
-                               (funcall receive-doc pos string plist))))
+                               ;; This really should be `timer-live-p'
+                               (when (and (timerp eldoc--enthusiasm-curbing-timer)
+                                          (memq eldoc--enthusiasm-curbing-timer
+                                                timer-list))
+                                 (cancel-timer eldoc--enthusiasm-curbing-timer))
+                               (setq eldoc--enthusiasm-curbing-timer
+                                     (run-at-time
+                                      (unless (zerop pos) 0.3)
+                                      nil receive-doc pos string plist)))))
                           (t
-                           (setq want (1+ want))
+                           (cl-incf want)
                            (lambda (string &rest plist)
                              (funcall receive-doc pos string plist)))))))
                (res (funcall eldoc-documentation-function)))
