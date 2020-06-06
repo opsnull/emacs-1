@@ -552,8 +552,9 @@ The built-in values for this function already handle
                   (let ((pos (prog1 howmany (cl-incf howmany))))
                     (cond (eagerp
                            (lambda (string &rest plist)
-                             (when (cl-loop for (p) in received
-                                            never (< p pos))
+                             (when (and string
+                                        (cl-loop for (p) in received
+                                                 never (< p pos)))
                                (setq want 1 received '())
                                ;; This really should be `timer-live-p'
                                (when (and (timerp eldoc--enthusiasm-curbing-timer)
