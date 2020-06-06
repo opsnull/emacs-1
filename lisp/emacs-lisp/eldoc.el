@@ -393,8 +393,9 @@ return any documentation.")
   "Get latest *eldoc* help buffer.  Interactively, display it."
   (interactive (list t))
   (prog1
-      (or eldoc--doc-buffer (setq eldoc--doc-buffer
-                                  (get-buffer-create "*eldoc*")))
+      (if (and eldoc--doc-buffer (buffer-live-p eldoc--doc-buffer))
+          eldoc--doc-buffer
+          (setq eldoc--doc-buffer (get-buffer-create "*eldoc*")))
     (when interactive (display-buffer eldoc--doc-buffer))))
 
 (defun eldoc--handle-docs (docs)
@@ -404,6 +405,7 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
   (with-current-buffer (eldoc-doc-buffer)
     (let ((inhibit-read-only t))
       (erase-buffer) (setq buffer-read-only t)
+      (local-set-key "q" 'quit-window)
       (insert (mapconcat #'identity (mapcar #'car docs) "\n")))
     (let* ((width (1- (window-width (minibuffer-window))))
            (val (if (and (symbolp eldoc-echo-area-use-multiline-p)
