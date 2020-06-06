@@ -47,7 +47,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 
 (defgroup eldoc nil
   "Show function arglist or variable docstring in echo area."
@@ -79,7 +79,7 @@ Actually, any name of a function which takes a string as an argument and
 returns another string is acceptable.
 
 Note that this variable has no effect, unless
-`eldoc-documentation-function' handles it explicitly."
+`eldoc-documentation-strategy' handles it explicitly."
   :type '(radio (function-item upcase)
 		(function-item downcase)
                 function))
@@ -123,7 +123,7 @@ documentation buffer is not already showing."
 (defface eldoc-highlight-function-argument
   '((t (:inherit bold)))
   "Face used for the argument at point in a function's argument list.
-Note that this face has no effect unless the `eldoc-documentation-function'
+Note that this face has no effect unless the `eldoc-documentation-strategy'
 handles it explicitly.")
 
 ;;; No user options below here.
@@ -218,7 +218,7 @@ expression point is on." :lighter eldoc-minor-mode-string
   :init-value t
   ;; For `read--expression', the usual global mode mechanism of
   ;; `change-major-mode-hook' runs in the minibuffer before
-  ;; `eldoc-documentation-function' is set, so `turn-on-eldoc-mode'
+  ;; `eldoc-documentation-strategy' is set, so `turn-on-eldoc-mode'
   ;; does nothing.  Configure and enable eldoc from
   ;; `eval-expression-minibuffer-setup-hook' instead.
   (if global-eldoc-mode
@@ -237,7 +237,7 @@ expression point is on." :lighter eldoc-minor-mode-string
 ;;;###autoload
 (defun turn-on-eldoc-mode ()
   "Turn on `eldoc-mode' if the buffer has ElDoc support enabled.
-See `eldoc-documentation-function' for more detail."
+See `eldoc-documentation-strategy' for more detail."
   (when (eldoc--supported-p)
     (eldoc-mode 1)))
 
@@ -365,11 +365,11 @@ Each hook function should accept at least one argument CALLBACK
 and decide whether to display a doc short string about the
 context around point.  If the decision and the doc string can be
 produced quickly, the hook function can ignore CALLBACK and
-immediately return the doc string, or nil if there's no doc
-appropriate for the context.  Otherwise, if the computation of
-said docstring is expensive or can't be performed directly, the
-hook function should return a non-nil, non-string value and then
-arrange for CALLBACK to be called at a later time.
+immediately return the doc string.  It may also return nil if
+there's no doc appropriate for the context.  Otherwise, if the
+computation of said docstring is expensive or can't be performed
+directly, the hook function should return a non-nil, non-string
+value and then arrange for CALLBACK to be called at a later time.
 
 That call is expected to pass CALLBACK a single argument
 DOCSTRING followed by an optional list of keyword-value pairs of
@@ -379,10 +379,7 @@ the form (:KEY VALUE :KEY2 VALUE2...).  KEY can be:
   string designating the type of documentation reported on by the
   hook function.
 
-Note that this hook is only in effect if the value of
-`eldoc-documentation-function' (notice the singular) is bound to
-one of its pre-set values.  Major modes should modify this hook
-locally, for example:
+Major modes should modify this hook locally, for example:
   (add-hook \\='eldoc-documentation-functions #\\='foo-mode-eldoc nil t)
 so that the global value (i.e. the default value of the hook) is
 taken into account if the major mode specific function does not
@@ -450,77 +447,101 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
 ;; `describe-symbol' for some reason.
 (defvar eldoc--make-callback nil "Helper for function `eldoc--make-callback'.")
 
-(defun eldoc--make-callback (&optional eagerp)
+(defun eldoc--make-callback (method)
   "Make callback suitable for `eldoc-documentation-functions'."
-  (funcall eldoc--make-callback eagerp))
+  (funcall eldoc--make-callback method))
 
 (defun eldoc-documentation-default ()
   "Show first doc string for item at point.
-Default value for `eldoc-documentation-function'."
+Default value for `eldoc-documentation-strategy'."
   (run-hook-with-args-until-success 'eldoc-documentation-functions
-   (eldoc--make-callback)))
+   (eldoc--make-callback :patient)))
 
-(defun eldoc-documentation-compose ()
+(defun eldoc-documentation-compose (&optional eagerlyp)
   "Show multiple doc strings at once after waiting for all.
-Meant as a value for `eldoc-documentation-function'."
+Meant as a value for `eldoc-documentation-strategy'."
   (run-hook-wrapped 'eldoc-documentation-functions
                     (lambda (f)
-                      (let* ((callback (eldoc--make-callback))
+                      (let* ((callback (eldoc--make-callback
+                                        (if eagerlyp :eager :patient)))
                              (str (funcall f callback)))
                         (if (stringp str) (funcall callback str))
                         nil)))
   t)
 
-(defun eldoc-documentation-eager ()
+(defun eldoc-documentation-compose-eagerly ()
+  "Show multiple doc strings at once as soon as possible.
+Meant as a value for `eldoc-documentation-strategy'."
+  (eldoc-documentation-compose 'eagerlyp))
+
+(defun eldoc-documentation-enthusiast ()
   "Show most important doc string produced so far.
-Meant as a value for `eldoc-documentation-function'."
+Meant as a value for `eldoc-documentation-strategy'."
   (run-hook-wrapped 'eldoc-documentation-functions
                     (lambda (f)
-                      (let* ((callback (eldoc--make-callback 'eager))
+                      (let* ((callback (eldoc--make-callback :enthusiast))
                              (str (funcall f callback)))
                         (if (stringp str) (funcall callback str))
                         nil))))
 
-(defcustom eldoc-documentation-function #'eldoc-documentation-default
-  "Function to call to return doc string.
-The function of no args should return a one-line string for displaying
-doc about a function etc.  appropriate to the context around point.
-It should return nil if there's no doc appropriate for the context.
-Typically doc is returned if point is on a function-like name or in its
-arg list.
+(define-obsolete-variable-alias 'eldoc-documentation-function
+  'eldoc-documentation-strategy "1.1.0")
 
-The result is used as is, so the function must explicitly handle
-the variable `eldoc-argument-case' and the face
-`eldoc-highlight-function-argument', if they are to have any
-effect.
+(defcustom eldoc-documentation-strategy #'eldoc-documentation-default
+  "How to collect and display the results of `eldoc-documentation-functions'.
+The following values are allowed:
 
-The built-in values for this function already handle
-`eldoc-echo-area-use-multiline-p'." ; FIXME: a lie, only some of it
+- `eldoc-documentation-default': queries the special hook for the
+  first function that produces a doc string value and displays
+  only that one;
+
+- `eldoc-documentation-compose': queries the special hook for all
+  functions that produce doc strings and displays all of them
+  together.  The doc strings are presented in the corresponding
+  order of the functions of the special hook;
+
+- `eldoc-documentation-compose-eagerly': queries the special hook
+  for all functions that produce doc strings and displays as many
+  as possible as soon as possible;
+
+- `eldoc-documentation-enthusiast': queries the special hook for
+  all functions the produce doc strings but displays only the
+  most important one at any given time.  A function appearing
+  first in the special hook is considered more important.
+
+This variable can also be set to a function of no args that
+allows for some or all of the special hook
+`eldoc-documentation-functions' to be run.  It should return nil,
+if no documentation is to be displayed at all, a string value
+with the documentation to display, or any other non-nil value in
+case the special hook functions undertake to display the
+documentation themselves."
   :link '(info-link "(emacs) Lisp Doc")
   :type '(radio (function-item eldoc-documentation-default)
                 (function-item eldoc-documentation-compose)
-                (function-item eldoc-documentation-eager)
+                (function-item eldoc-documentation-compose-eagerly)
+                (function-item eldoc-documentation-enthusiast)
                 (function :tag "Other function"))
   :version "28.1")
 
 (defun eldoc--supported-p ()
   "Non-nil if an ElDoc function is set for this buffer."
-  (and (not (memq eldoc-documentation-function '(nil ignore)))
+  (and (not (memq eldoc-documentation-strategy '(nil ignore)))
        (or eldoc-documentation-functions
            ;; The old API had major modes set `eldoc-documentation-function'
            ;; to provide eldoc support.  It's impossible now to determine
-           ;; reliably whether the `eldoc-documentation-function' provides
+           ;; reliably whether the `eldoc-documentation-strategy' provides
            ;; eldoc support (as in the old API) or whether it just provides
            ;; a way to combine the results of the
            ;; `eldoc-documentation-functions' (as in the new API).
            ;; But at least if it's set buffer-locally it's a good hint that
            ;; there's some eldoc support in the current buffer.
-           (local-variable-p 'eldoc-documentation-function))))
+           (local-variable-p 'eldoc-documentation-strategy))))
 
 (defalias 'eldoc #'eldoc-print-current-symbol-info)
 
 (defvar eldoc--enthusiasm-curbing-timer nil
-  "Timer used by `eldoc-documentation-eager' to avoid blinking.")
+  "Timer used by `eldoc-documentation-enthusiast' to avoid blinking.")
 
 (defun eldoc-print-current-symbol-info ()
   "Document thing at point."
@@ -529,53 +550,52 @@ The built-in values for this function already handle
       ;; Erase the last message if we won't display a new one.
       (when eldoc-last-message
         (eldoc-message nil))
-    (let ((non-essential t)
-          (buffer (current-buffer)))
+    (let ((non-essential t))
       ;; Only keep looking for the info as long as the user hasn't
       ;; requested our attention.  This also locally disables inhibit-quit.
       (while-no-input
-        (let* ((howmany 0)    ; how many hook functions have registered
-               (want 0)       ; how many calls to `receive-doc' until we print
-               (received '()) ; what we will print
-               (receive-doc
-                (lambda (pos string plist)
-                  (with-current-buffer buffer
-                    (when (and string (> (length string) 0))
-                      (push (cons pos (cons string plist)) received))
-                    (cl-decf want)
-                    (when (zerop want)
-                      (eldoc--handle-docs
-                       (mapcar #'cdr
-                               (cl-sort received #'< :key #'car)))))))
-               (eldoc--make-callback
-                (lambda (eagerp)
-                  (let ((pos (prog1 howmany (cl-incf howmany))))
-                    (cond (eagerp
-                           (lambda (string &rest plist)
-                             (when (and string
-                                        (cl-loop for (p) in received
-                                                 never (< p pos)))
-                               (setq want 1 received '())
-                               ;; This really should be `timer-live-p'
-                               (when (and (timerp eldoc--enthusiasm-curbing-timer)
-                                          (memq eldoc--enthusiasm-curbing-timer
-                                                timer-list))
-                                 (cancel-timer eldoc--enthusiasm-curbing-timer))
-                               (setq eldoc--enthusiasm-curbing-timer
-                                     (run-at-time
-                                      (unless (zerop pos) 0.3)
-                                      nil receive-doc pos string plist)))))
-                          (t
-                           (cl-incf want)
-                           (lambda (string &rest plist)
-                             (funcall receive-doc pos string plist)))))))
-               (res (funcall eldoc-documentation-function)))
-          (cond (;; old protocol: got string, output immediately
-                 (stringp res) (setq want 1) (funcall receive-doc 0 res nil))
+        (let* ((howmany 0) (want 0) (docs-registered '()))
+          (cl-labels
+              ((register-doc (pos string plist)
+                (when (and string (> (length string) 0))
+                  (push (cons pos (cons string plist)) docs-registered)))
+               (display-doc ()
+                (eldoc--handle-docs
+                 (mapcar #'cdr
+                         (cl-sort docs-registered #'< :key #'car))))
+               (make-callback (method)
+                (let ((pos (prog1 howmany (cl-incf howmany))))
+                  (cl-ecase method
+                    (:enthusiast
+                     (lambda (string &rest plist)
+                       (when (and string (cl-loop for (p) in docs-registered
+                                                  never (< p pos)))
+                         (setq docs-registered '())
+                         (register-doc pos string plist)
+                         (when (and (timerp eldoc--enthusiasm-curbing-timer)
+                                    (memq eldoc--enthusiasm-curbing-timer
+                                          timer-list))
+                           (cancel-timer eldoc--enthusiasm-curbing-timer))
+                         (setq eldoc--enthusiasm-curbing-timer
+                               (run-at-time (unless (zerop pos) 0.3)
+                                            nil #'display-doc)))))
+                    (:patient
+                     (cl-incf want)
+                     (lambda (string &rest plist)
+                       (register-doc pos string plist)
+                       (when (zerop (cl-decf want)) (display-doc))))
+                    (:eager
+                     (lambda (string &rest plist)
+                       (register-doc pos string plist)
+                       (display-doc)))))))
+            (let* ((eldoc--make-callback #'make-callback)
+                   (res (funcall eldoc-documentation-strategy)))
+              (cond (;; old protocol: got string, output immediately
+                 (stringp res) (register-doc 0 res nil) (display-doc))
                 (;; old protocol: got nil, clear the echo area
                  (null res) (eldoc-message nil))
                 (;; got something else, trust callback will be called
-                 t)))))))
+                 t)))))))))
 
 ;; If the entire line cannot fit in the echo area, the symbol name may be
 ;; truncated or eliminated entirely from the output to make room for the
