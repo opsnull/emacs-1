@@ -231,7 +231,10 @@ expression point is on." :lighter eldoc-minor-mode-string
   ;; Setup `eldoc', similar to `emacs-lisp-mode'.  FIXME: Call
   ;; `emacs-lisp-mode' itself?
   (add-hook 'eldoc-documentation-functions
-            #'elisp-eldoc-documentation-function nil t)
+            #'elisp-eldoc-var-docstring nil t)
+  (add-hook 'eldoc-documentation-functions
+            #'elisp-eldoc-funcall nil t)
+  (setq eldoc-documentation-strategy 'eldoc-documentation-default)
   (eldoc-mode +1))
 
 ;;;###autoload
