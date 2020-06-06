@@ -418,11 +418,11 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
                         (t 1))))
       (eldoc-message nil) ; clear the echo area
       (when docs
+        (goto-char (point-min))
         (cond
          ((> available 1)
           (cl-loop
-           initially (goto-char (point-min))
-           (goto-char (line-end-position (1+ available)))
+           initially (goto-char (line-end-position (1+ available)))
            for truncated = nil then t
            for needed
            = (let ((truncate-lines message-truncate-lines))
@@ -444,7 +444,7 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
           ;; truncate brutally ; FIXME: use `eldoc-prefer-doc-buffer' here, too?
           (eldoc-message
            (truncate-string-to-width
-            (replace-regexp-in-string "\n" " " (car (car docs))) width))))))))
+            (buffer-substring (point-min) (line-end-position 1)) width))))))))
 
 ;; this variable should be unbound, but that confuses
 ;; `describe-symbol' for some reason.
