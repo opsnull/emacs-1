@@ -280,7 +280,9 @@ Blank lines separate paragraphs.  Semicolons start comments.
                           electric-pair-text-pairs))
     (add-hook 'electric-pair-mode-hook #'emacs-lisp-set-electric-text-pairs))
   (add-hook 'eldoc-documentation-functions
-            #'elisp-eldoc-documentation-function nil t)
+            #'elisp-eldoc-var-docstring nil t)
+  (add-hook 'eldoc-documentation-functions
+            #'elisp-eldoc-funcall nil t)
   (add-hook 'xref-backend-functions #'elisp--xref-backend nil t)
   (setq-local project-vc-external-roots-function #'elisp-load-path-roots)
   (add-hook 'completion-at-point-functions
@@ -1403,20 +1405,18 @@ which see."
       or argument string for functions.
   2 - `function' if function args, `variable' if variable documentation.")
 
-(defun elisp-eldoc-documentation-function (_ignored &rest _also-ignored)
-  "Contextual documentation function for Emacs Lisp.
-Intended to be placed in `eldoc-documentation-functions' (which
-see)."
-  (let ((current-symbol (elisp--current-symbol))
-	(current-fnsym  (elisp--fnsym-in-current-sexp)))
-    (cond ((null current-fnsym)
-	   nil)
-	  ((eq current-symbol (car current-fnsym))
-	   (or (apply #'elisp-get-fnsym-args-string current-fnsym)
-	       (elisp-get-var-docstring current-symbol)))
-	  (t
-	   (or (elisp-get-var-docstring current-symbol)
-	       (apply #'elisp-get-fnsym-args-string current-fnsym))))))
+(defun elisp-eldoc-funcall (&rest _ignored)
+  "Document function call at point.
+Intended for `eldoc-documentation-functions' (which see)."
+  (let ((fn-sym (elisp--fnsym-in-current-sexp)))
+    (when fn-sym
+      (apply #'elisp-get-fnsym-args-string fn-sym))))
+
+(defun elisp-eldoc-var-docstring (&rest _ignored)
+  "Document variable at point.
+Intended for `eldoc-documentation-functions' (which see)."
+  (let ((sym (elisp--current-symbol)))
+    (when sym (elisp-get-var-docstring sym))))
 
 (defun elisp-get-fnsym-args-string (sym &optional index prefix)
   "Return a string containing the parameter list of the function SYM.
