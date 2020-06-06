@@ -47,7 +47,7 @@
 
 ;;; Code:
 
-(require 'cl-lib)
+(eval-when-compile (require 'cl-lib))
 
 (defgroup eldoc nil
   "Show function arglist or variable docstring in echo area."
@@ -565,7 +565,8 @@ documentation themselves."
                (display-doc ()
                 (eldoc--handle-docs
                  (mapcar #'cdr
-                         (cl-sort docs-registered #'< :key #'car))))
+                         (sort docs-registered
+                               (lambda (a b) (< (car a) (car b)))))))
                (make-callback (method)
                 (let ((pos (prog1 howmany (cl-incf howmany))))
                   (cl-ecase method
