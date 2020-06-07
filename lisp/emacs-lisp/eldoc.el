@@ -165,7 +165,7 @@ directly.  Instead, use `eldoc-add-command' and `eldoc-remove-command'.")
 This is used to determine if `eldoc-idle-delay' is changed by the user.")
 
 (defvar eldoc-message-function #'eldoc-minibuffer-message
-  "The function used by `eldoc-message' to display messages.
+  "The function used by `eldoc--message' to display messages.
 It should receive the same arguments as `message'.")
 
 (defun eldoc-edit-message-commands ()
@@ -299,7 +299,10 @@ Otherwise work like `message'."
           (force-mode-line-update)))
     (apply #'message format-string args)))
 
-(defun eldoc-message (&optional string)
+(make-obsolete
+ 'eldoc-message "use `eldoc-documentation-functions' instead." "1.1.0")
+(defun eldoc-message (&optional string) (eldoc--message string))
+(defun eldoc--message (&optional string)
   "Display STRING as an ElDoc message if it's non-nil.
 
 Also store it in `eldoc-last-message' and return that value."
@@ -333,8 +336,8 @@ Also store it in `eldoc-last-message' and return that value."
        (not (minibufferp))      ;We don't use the echo area when in minibuffer.
        (if (and (eldoc-display-message-no-interference-p)
 		(eldoc--message-command-p this-command))
-	   (eldoc-message eldoc-last-message)
-         ;; No need to call eldoc-message since the echo area will be cleared
+	   (eldoc--message eldoc-last-message)
+         ;; No need to call eldoc--message since the echo area will be cleared
          ;; for us, but do note that the last-message will be gone.
          (setq eldoc-last-message nil))))
 
@@ -416,7 +419,7 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
                         (float (truncate (* (frame-height) val)))
                         (integer val)
                         (t 1))))
-      (eldoc-message nil) ; clear the echo area
+      (eldoc--message nil) ; clear the echo area
       (when docs
         (goto-char (point-min))
         (cond
@@ -434,7 +437,7 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
            (unless (and truncated
                         eldoc-prefer-doc-buffer
                         (get-buffer-window eldoc--doc-buffer))
-             (eldoc-message
+             (eldoc--message
               (concat (buffer-substring (point-min) (point))
                       (and truncated
                            (format
@@ -442,7 +445,7 @@ Honour most of `eldoc-echo-area-use-multiline-p'."
                             (substitute-command-keys "\\[eldoc-doc-buffer]"))))))))
          ((= available 1)
           ;; truncate brutally ; FIXME: use `eldoc-prefer-doc-buffer' here, too?
-          (eldoc-message
+          (eldoc--message
            (truncate-string-to-width
             (buffer-substring (point-min) (line-end-position 1)) width))))))))
 
@@ -552,7 +555,7 @@ documentation themselves."
   (if (not (eldoc-display-message-p))
       ;; Erase the last message if we won't display a new one.
       (when eldoc-last-message
-        (eldoc-message nil))
+        (eldoc--message nil))
     (let ((non-essential t))
       ;; Only keep looking for the info as long as the user hasn't
       ;; requested our attention.  This also locally disables inhibit-quit.
@@ -597,7 +600,7 @@ documentation themselves."
               (cond (;; old protocol: got string, output immediately
                  (stringp res) (register-doc 0 res nil) (display-doc))
                 (;; old protocol: got nil, clear the echo area
-                 (null res) (eldoc-message nil))
+                 (null res) (eldoc--message nil))
                 (;; got something else, trust callback will be called
                  t)))))))))
 
