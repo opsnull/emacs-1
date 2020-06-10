@@ -92,9 +92,13 @@ instead."
 
 (defvar-local prettify-symbols-alist nil
   "Alist of symbol prettifications.
-Each element looks like (SYMBOL . CHARACTER), where the symbol
+Each element can look like (SYMBOL . CHARACTER), where the symbol
 matching SYMBOL (a string, not a regexp) will be shown as
 CHARACTER instead.
+
+Elements can also look like (prettify-regexp REGEXP CHARACTER)
+which will behave like the simpler (SYMBOL . CHARACTER) form
+except it will match regular expressions.
 
 CHARACTER can be a character, or it can be a list or vector, in
 which case it will be used to compose the new symbol as per the
@@ -121,6 +125,30 @@ The matched symbol is the car of one entry in `prettify-symbols-alist'.
 The predicate receives the match's start and end positions as well
 as the match-string as arguments.")
 
+;; (prettify-symbols-default-compose-replacer '(("xyz" 231) (prettify-regexp "aaa\\(bbb\\)" 169)) 568 574 "aaabbb")
+(defun prettify-symbols-default-compose-replacer (alist start end match)
+  "Return the compose-region prettification for MATCH from ALIST.
+START and END are passed back and may be modified (narrowed)."
+  (let ((quick-assoc (cdr (assoc match alist))))
+    (if quick-assoc
+        ;; Return the quick lookup if we can, else...
+        (list start end quick-assoc)
+      (cl-loop for ps in alist
+               ;; Did we get a valid regexp entry, and does it match?
+               if (and (eq 'prettify-regexp (car-safe ps))
+                       (string-match (nth 1 ps) match))
+               ;; Return the actual start and end of the prettified symbol
+               return (list (+ start (match-beginning 1))
+                            (+ start(match-end 1))
+                            (nth 2 ps))))))
+
+(defvar-local prettify-symbols-compose-replacer
+  #'prettify-symbols-default-compose-replacer
+  "A function to generate the replacement for a matched string.
+The function receives the current prettify-symbols-alist, the
+match's start and end positions, and the match-string as
+arguments.")
+
 (defun prettify-symbols--compose-symbol (alist)
   "Compose a sequence of characters into a symbol.
 Regexp match data 0 specifies the characters to be composed."
@@ -132,10 +160,14 @@ Regexp match data 0 specifies the characters to be composed."
              (funcall prettify-symbols-compose-predicate start end match))
         ;; That's a symbol alright, so add the composition.
         (with-silent-modifications
-          (compose-region start end (cdr (assoc match alist)))
-          (add-text-properties
-           start end
-           `(prettify-symbols-start ,start prettify-symbols-end ,end)))
+          (let* ((replacement (funcall prettify-symbols-compose-replacer
+                                       alist start end match))
+                 (start (nth 0 replacement))
+                 (end (nth 1 replacement)))
+            (apply #'compose-region replacement)
+            (add-text-properties
+             start end
+             `(prettify-symbols-start ,start prettify-symbols-end ,end))))
       ;; No composition for you.  Let's actually remove any
       ;; composition we may have added earlier and which is now
       ;; incorrect.
@@ -146,9 +178,21 @@ Regexp match data 0 specifies the characters to be composed."
   ;; Return nil because we're not adding any face property.
   nil)
 
+(defun prettify-symbols--make-matcher ()
+  "Make the matcher portion of the font-lock keywords."
+  (mapconcat #'identity
+             (cons (regexp-opt (cl-loop for s in (mapcar 'car prettify-symbols-alist)
+                                        if (stringp s)
+                                        collect s)
+                               t)
+                   (cl-loop for ps in prettify-symbols-alist
+                            if (eq 'prettify-regexp (car-safe ps))
+                            collect (nth 1 ps)))
+             "\\|"))
+
 (defun prettify-symbols--make-keywords ()
   (if prettify-symbols-alist
-      `((,(regexp-opt (mapcar 'car prettify-symbols-alist) t)
+      `((,(prettify-symbols--make-matcher)
          (0 (prettify-symbols--compose-symbol ',prettify-symbols-alist))))
     nil))
 
